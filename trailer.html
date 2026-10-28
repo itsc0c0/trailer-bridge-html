@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>PineIPTV Trailer Relay</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #player { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="player"></div>
+<script>
+  // PineIPTV trailer relay.
+  // Samsung TV apps run from file://, so YouTube receives no referrer and
+  // refuses to play embeds (error 153). The TV app loads this page in an
+  // iframe instead; it embeds YouTube from a normal https origin and relays
+  // player events to the app with postMessage.
+  (function () {
+    var params = new URLSearchParams(location.search);
+    var videoId = params.get('v') || '';
+    var muted = params.get('mute') === '1';
+    var volume = parseInt(params.get('vol') || '80', 10);
+    var player = null;
+
+    function send(message) {
+      message.source = 'pine-trailer';
+      try { parent.postMessage(message, '*'); } catch (e) {}
+    }
+
+    window.onYouTubeIframeAPIReady = function () {
+      if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) { send({ ev: 'error', code: 2 }); return; }
+      player = new YT.Player('player', {
+        videoId: videoId,
+        width: '100%',
+        height: '100%',
+        playerVars: {
+          autoplay: 1, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3,
+          modestbranding: 1, playsinline: 1, rel: 0, cc_load_policy: 0,
+          mute: muted ? 1 : 0, enablejsapi: 1, origin: location.origin
+        },
+        events: {
+          onReady: function (e) {
+            // Unmuting raises a zero volume to a default, so it goes first.
+            try { if (!muted) e.target.unMute(); e.target.setVolume(volume); e.target.playVideo(); } catch (err) {}
+            // "load": the app can play other videos in this same player.
+            send({ ev: 'ready', caps: ['load'] });
+          },
+          onStateChange: function (e) { send({ ev: 'state', s: e.data }); },
+          onError: function (e) { send({ ev: 'error', code: e.data }); }
+        }
+      });
+      setInterval(function () {
+        if (player && player.getCurrentTime) send({ ev: 'time', t: player.getCurrentTime(), d: player.getDuration() });
+      }, 500);
+    };
+
+    window.addEventListener('message', function (event) {
+      var m = event.data || {};
+      if (!player || !m.cmd) return;
+      try {
+        if (m.cmd === 'play') player.playVideo();
+        else if (m.cmd === 'pause') player.pauseVideo();
+        else if (m.cmd === 'mute') player.mute();
+        else if (m.cmd === 'unmute') player.unMute();
+        else if (m.cmd === 'volume') player.setVolume(m.v);
+        else if (m.cmd === 'seek') player.seekTo(m.t, true);
+        else if (m.cmd === 'load' && /^[A-Za-z0-9_-]{11}$/.test(m.v)) player.loadVideoById(m.v);
+      } catch (e) {}
+    });
+
+    var tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.onerror = function () { send({ ev: 'error', code: -1 }); };
+    document.head.appendChild(tag);
+  })();
+</script>
+</body>
+</html>
